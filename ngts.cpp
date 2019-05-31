@@ -1,0 +1,288 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <omp.h>
+__global__
+
+using namespace std;
+const unsigned long LINES_SIZE = 2 * SIDE + 2;
+
+struct TicTacToeState : public State<TicTacToeState, TicTacToeMove> {
+
+    vector<char> board;
+
+    TicTacToeState() : State({0, 1}) { }
+
+    TicTacToeState(const string &init_string) : State({0, 1}) {
+        const unsigned long length = init_string.length();
+        const unsigned long correct_length = SIDE * SIDE;
+        if (length != correct_length) {
+            throw invalid_argument("Initialization string length must be " + to_string(correct_length));
+        }
+        for (int i = 0; i < length; i++) {
+            const char c = init_string[i];
+            if (c != PLAYER_1 && c != PLAYER_2 && c != EMPTY) {
+                throw invalid_argument(string("Undefined symbol used: '") + c + "'");
+            }
+        }
+        board = vector<char>(init_string.begin(), init_string.end());
+    }
+
+    TicTacToeState clone() const override {
+        TicTacToeState clone = TicTacToeState();
+        clone.board = board;
+        clone.player_to_move = player_to_move;
+        return clone;
+    }
+
+    int get_goodness() const override {
+        int goodness = 0;
+        const auto &counts = count_players_on_lines(player_to_move);
+        for (int i = 0; i < LINES_SIZE; ++i) {
+            const int player_places = counts[2 * i];
+            const int enemy_places = counts[2 * i + 1];
+            if (player_places == SIDE) {
+                goodness += SIDE * SIDE;
+            }
+            else if (enemy_places == SIDE) {
+                goodness -= SIDE * SIDE;
+            }
+            else if (player_places == SIDE - 1 and enemy_places == 0) {
+                goodness += SIDE;
+            }
+            else if (enemy_places == SIDE - 1 and player_places == 0) {
+                goodness -= SIDE;
+            }
+            else if (player_places == SIDE - 2 and enemy_places == 0) {
+                ++goodness;
+            }
+            else if (enemy_places == SIDE - 2 and player_places == 0) {
+                --goodness;
+            }
+        }
+        return goodness;
+    }
+
+    vector<TicTacToeMove> get_legal_moves(int max_moves = INF) const override {
+        int available_moves = SIDE * SIDE;
+        if (max_moves > available_moves) {
+            max_moves = available_moves;
+        }
+        vector<TicTacToeMove> moves(max_moves);
+        int i = 0;
+        for (int y = 0; y < SIDE; ++y) {
+            for (int x = 0; x < SIDE; ++x) {
+                if (board[y * SIDE + x] == EMPTY) {
+                    moves[i++] = TicTacToeMove(x, y);
+                    if (i >= max_moves) {
+                        return moves;
+                    }
+                }
+            }
+        }
+        moves.resize(i);
+        return moves;
+    }
+
+    bool is_terminal() const override {
+        if (!has_empty_space()) {
+            return true;
+        }
+        const auto &counts = count_players_on_lines(player_to_move);
+        for (int i = 0; i < LINES_SIZE; ++i) {
+            if (counts[2 * i] == SIDE || counts[2 * i + 1] == SIDE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool is_winner(int player) const override {
+        const auto &counts = count_players_on_lines(player);
+        for (int i = 0; i < LINES_SIZE; ++i) {
+            if (counts[2 * i] == SIDE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    int player_char_to_index(char player) const override {
+        return (player == PLAYER_1) ? 0 : 1;
+    }
+
+    char player_index_to_char(int index) const override {
+        return (index == 0) ? PLAYER_1 : PLAYER_2;
+    }
+
+    void make_move(const TicTacToeMove &move) override {
+        board[move.y * SIDE + move.x] = player_index_to_char(player_to_move);
+        player_to_move = get_next_player(player_to_move);
+    }
+
+    void undo_move(const TicTacToeMove &move) override {
+        board[move.y * SIDE + move.x] = EMPTY;
+        player_to_move = get_next_player(player_to_move);
+    }
+
+    bool has_empty_space() const {
+        for (unsigned y = 0; y < SIDE; ++y) {
+            for (unsigned x = 0; x < SIDE; ++x) {
+                if (board[y * SIDE + x] == EMPTY) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    vector<int> count_players_on_lines(int player) const {
+        vector<int> counts(2 * LINES_SIZE);
+        const auto enemy = player_index_to_char(get_next_player(player));
+        for (int i = 0; i < LINES_SIZE; ++i) {
+            int player_places = 0;
+            int enemy_places = 0;
+            for (int j = 0; j < SIDE; ++j) {
+                const TicTacToeMove &coord = LINES[i][j];
+                const int board_index = coord.y * SIDE + coord.x;
+                if (board[board_index] == player_index_to_char(player)) {
+                    ++player_places;
+                }
+                else if (board[board_index] == enemy) {
+                    ++enemy_places;
+                }
+            }
+            counts[2 * i] = player_places;
+            counts[2 * i + 1] = enemy_places;
+        }
+        return counts;
+    }
+
+    ostream &to_stream(ostream &os) const override {
+        for (int y = 0; y < SIDE; ++y) {
+            for (int x = 0; x < SIDE; ++x) {
+                os << board[y * SIDE + x];
+            }
+            os << "\n";
+        }
+        os << player_index_to_char(player_to_move) << endl;
+        return os;
+    }
+
+    bool operator==(const TicTacToeState &other) const override {
+        return board == other.board;
+    }
+
+    size_t hash() const override {
+        using boost::hash_value;
+        using boost::hash_combine;
+        size_t seed = 0;
+        hash_combine(seed, hash_value(board));
+        return seed;
+    }
+};
+
+
+void NGTS(po,T)
+{
+    int blockSize = 256;
+    int numBlocks = (N + blockSize - 1) / blockSize;
+    vector<node> leafcalculationfunctionGPU;
+    vector<node> childnodelistGPU;
+    node evaluatedvalueCPU;
+    node childnodeCPU;
+
+    node po = T.root;
+    int mybest=0
+    if(T.root is nullptr)
+    {
+        return po
+    }
+    if(po.hojas>T.Lmin)
+    {
+        for( int i =0; i<po.hojas.size(),i++)
+            {
+            <<<numBlocks, blockSize>>>(pl, legalpoints,leafcalculationfunctionGPU);#GPU
+            for (int i =0 i< evaluatedvaluelistGPU.size();i++)
+                {
+                evaluatedvaluelistGPU[i].padre = evaluatedvaluelistGPU[i]
+                if(evaluatedvaluelistGPU[i]==T.root)
+                    {
+                    mybest=evaluatedvaluelistGPU[i]
+                    }
+                #no entiendo bien esta parte
+                Prune(T);
+                }
+            }
+    }
+    if(po.hojas>0)
+    {
+        leaf = T.oneleaf()
+        evaluatedvalueCPU=leafcalculationfunctionCPU(leaf); #CPU
+        if(evaluatedvaluelistGPU==T.root):
+        {
+            mybest=evaluatedvaluelistCPU;
+        }
+        Prunte(T);
+    }
+        
+    if(po.branches>T.bmin)
+    {
+        for(int i=0;i<branches.size();i++)
+        {
+            <<<numBlocks, blockSize>>>(pl, legalpoints,childnodelistGPU)#gpu;
+            for(int i =0;i<childnodelistGPU.size();i++)
+            {
+                update(T,childnodelistGPU);
+            }
+        }
+    }
+    if(po.branches>0)
+    {
+        leaf = T.oneleaf()
+        childnodeCPU=branchcalculationfunctionCPU(po)
+        update(T,childnodeCPU)
+    }
+}
+
+vector<node> branchcalculationfunctionGPU(pl,legalpoints,&leafcalculationfunctionGPU)
+{ 
+    int rank = threadIdx.x;
+    int stride = blockDim;
+    for(int x =0;i<board.get_legal_moves();x++)
+    {
+        for(int y=0;i<board.get_legal_moves(),y++)
+        {
+            if(board.get_goodness())
+        }
+    }
+    
+    for(int p =0;i<legalpoints.size(); p++)
+    {
+
+        # reconocer p respecto a las reglas del juego 
+        # calcular puntaje
+        # acumular puntaje
+    }
+    #guardar jugadas disponibles en ml
+    return leafcalculationfunctionGPU
+}
+
+vector<node> leafcalculationfunctionGPU(pl,nonemptymoves,&childnodelistGPU)
+{
+    int rank = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim*gridDim.x;
+    for(int p =0;p<nonemptymoves;p++)
+    {
+        # reconocer p respecto a las reglas del juego 
+        # calcular puntaje
+        # acumular puntaje
+    }
+    #guardar todos los valore evaluados en V
+    return childnodelistGPU
+}   
+
+int main(int argc, char* argv[])
+{
+    int thread_count=4;
+    return 0
+}
