@@ -1,1 +1,1 @@
-Si es que desea compilar solo el gts sin paralelizacion profe el comando seria gcc alphabeta.c board.c game.c main.c tictactoe.h -o gts si no estoy dejando un precompilado llamado game solo haria ./game
+Si es que desea compilar solo el gts sin paralelizacion profesor el comando seria gcc alphabeta.c board.c game.c main.c tictactoe.h -o gts si no estoy dejando un precompilado llamado game solo haria ./game
